@@ -69,7 +69,7 @@ if __name__ == "__main__":
     points = [] 
 
     # Load the image
-    image = cv2.imread('images/aerien1.tif')
+    image = cv2.imread('image-inpainting/images/aerien1.tif')
     img_copy = image.copy()
 
     # Display the image and set up the mouse callback
