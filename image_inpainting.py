@@ -94,6 +94,100 @@ def get_matrix_image(image, binary_mask):
     return image_with_target_region
 
 
+def extract_window(pixel, window_size, matrix):
+    """
+    Extracts the coordinates of the pixels in a window around a given pixel
+    and retrieves the corresponding values from the given matrix.
+    
+    Parameters:
+    pixel (tuple): A tuple (x, y) representing the coordinates of the central pixel.
+    window_size (int): The size of the window (must be an odd number for a symmetric patch).
+    matrix (np.ndarray): A 2D array representing the matrix from which to extract values.
+    
+    Returns:
+    tuple: A tuple containing two elements:
+        - list: A list of tuples representing the coordinates of the pixels in the window around the given pixel.
+        - list: A list of values from the matrix corresponding to the extracted window coordinates.
+    """
+    
+    x, y = pixel
+    half_window = window_size // 2
+    
+    window_coordinates = []
+    window_values = []
+
+    for i in range(-half_window, half_window + 1):
+        for j in range(-half_window, half_window + 1):
+            window_x = x + i
+            window_y = y + j
+            window_coordinates.append((window_x, window_y))
+            
+            if 0 <= window_x < matrix.shape[0] and 0 <= window_y < matrix.shape[1]:
+                window_values.append(matrix[window_x, window_y])
+            else:
+                window_values.append(None)
+
+    return window_coordinates, window_values
+
+
+def calculate_confidence(confidence_matrix, window_coordinates):
+    """
+    Calculate the confidence value based on the surrounding patch defined by window coordinates.
+    
+    Parameters:
+    confidence_matrix (np.ndarray): A matrix representing the confidence values of each pixel.
+    window_coordinates (list): A list of tuples representing the coordinates of the pixels in the window.
+    
+    Returns:
+    float: The calculated confidence value as the average of the values in the window.
+    """
+
+    sum_confidence = 0.0
+    
+    for (x, y) in window_coordinates:
+        sum_confidence += confidence_matrix[x, y]
+
+    confidence_value = sum_confidence / len(window_coordinates)
+    
+    return confidence_value
+
+
+def calculate_data(image, mask_target_region, pixel): # Pedro
+    """
+    Calculates the data term associated with a pixel.
+
+    D = norm of the scalar produt between the orthogonal of the gradient of the image in the point p 
+    and the normal of the target region border in the point p, all divided by alpha (= 255 for a typical
+    grey-level image)?
+
+    OKAY?
+    """
+    return data_value
+
+
+def calculate_priorities(confidence: np.ndarray, data: np.ndarray):
+    """
+    Calculates the priority values for each pixel in the fill front.
+
+    The function takes two vectors as input: 'confidence' and 'data', which correspond to the confidence values
+    and data terms for the pixels in the fill front, respectively. It computes the priority for each pixel using
+    the formula P = C * D, where C is the confidence value and D is the data term.
+
+    Parameters:
+    confidence (np.ndarray): A vector of confidence values for the pixels in the fill front.
+    data (np.ndarray): A vector of data terms for the pixels in the fill front.
+
+    Returns:
+    int: The index of the pixel with the highest priority.
+    """
+
+    # Compute priority values
+    priority_values = confidence * data
+
+    # Find the index of the maximum priority value
+    index_max_priority = np.argmax(priority_values)
+
+    return index_max_priority
 
 
 ### Main ###
@@ -101,7 +195,12 @@ def get_matrix_image(image, binary_mask):
 if __name__ == "__main__":
     
     drawing = False
-    points = [] 
+    points = []
+
+    confidence_fill_front = np.empty((0,))
+    data_fill_front = np.empty((0,))
+
+    window_size = 9 # n window size (nxn)
 
     # Load the image
     image = cv2.imread('image-inpainting/images/aerien1.tif')
@@ -117,13 +216,36 @@ if __name__ == "__main__":
         if key == ord('q'):
             break
 
-    # After point selection, obtain the target region matrices
+    # After point selection, obtain the binary mask and the contour
     if len(points) >= 3: 
         binary_mask, contour = get_matrix_mask(image, points)
         
+        # Press a key to close the window
         cv2.waitKey(0)
 
     cv2.destroyAllWindows()
 
+
+    # Imagem com a binary matrix (valores 0 na partre unfilled e valores reais fora dela)
+    image_unfilled = image * (1 - binary_mask)
+
     # Initial confidence matrix 
     confidence_matrix = np.ones_like(binary_mask, dtype=np.uint8) - binary_mask
+
+    # Loop que calcula a C(p) e D(p) de cada pixel do fill front (contour) gerando vetores e depois seta o vetor prioridade que segue o index do vetor contour
+    for pixel in contour:
+        pixel_confidence = calculate_confidence(confidence_matrix, pixel, window_size)
+        pixel_data = calculate_data(image, mask_target_region, pixel)
+
+        confidence_fill_front = np.append(confidence_fill_front, pixel_confidence)
+        data_fill_front = np.append(data_fill_front, pixel_data)
+    
+    # Find the patch with highest priority
+    index_highest_priority = calculate_priorities(confidence_fill_front, data_fill_front)
+    pixel_highest_priority = contour[index_highest_priority]
+    patch_coordinates, patch_values = extract_window(pixel_highest_priority, window_size, image_unfilled)
+
+    # Patch matching
+
+
+    # Após o preenchimento do pixel precisa mapear os pontos e retornar para a lista points para poder gerar a nova binary mask e contour
