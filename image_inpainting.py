@@ -459,7 +459,7 @@ if __name__ == "__main__":
         for pixel in points_contour:
             window_coordinates, _ = extract_window(pixel, window_size, image_unfilled, loaded_mask)
             pixel_confidence = calculate_confidence(confidence_matrix, window_coordinates)
-            pixel_data = np.random.rand() ## ADICIONAR A SUA FUNÇÃO!!!!!
+            pixel_data = calculate_data(image, loaded_mask, pixel, 5, 1) 
 
             confidence_fill_front = np.append(confidence_fill_front, pixel_confidence)
             data_fill_front = np.append(data_fill_front, pixel_data)
