@@ -1,19 +1,20 @@
 import cv2
 import numpy as np
+import os
 
 ### Functions ###
 
 def select_points(event, x, y, flags, param):
     """
     Callback function to select points on the image.
-    
+
     Parameters:
     - event: The event type (mouse action).
     - x: The x-coordinate of the mouse event.
     - y: The y-coordinate of the mouse event.
     - flags: Any relevant flags (not used).
     - param: Any additional parameters (not used).
-    
+
     This function allows the user to click on the image to select points that 
     form a contour. The selected points are stored in the global 'points' list,
     and the image is updated to show the selected points and lines connecting them.
@@ -28,7 +29,7 @@ def select_points(event, x, y, flags, param):
         img_copy = image.copy()
 
         for i, point in enumerate(points):
-            cv2.circle(img_copy, point, 5, (0, 0, 255), -1)
+            cv2.circle(img_copy, point, 1, (0, 0, 255), -1)
 
             if i > 0:
                 cv2.line(img_copy, points[i - 1], points[i], (0, 255, 0), 2)
@@ -37,38 +38,64 @@ def select_points(event, x, y, flags, param):
 
 
 def get_matrix_mask(image, points):
-    """
-    Extracts a binary mask and the contour for a specified polygonal region.
+    # Create the contour array from the provided points
+    contour = np.array(points, dtype=np.int32)  # Remove the extra array wrapping
 
-    This function takes an input image and a set of points defining a polygonal region. 
-    It returns:
-    - A binary mask where 1 represents the pixels inside the polygonal region 
-      and 0 represents the pixels outside.
-    - The contour (polygon) used to generate the mask.
-
-    Parameters:
-    - image (numpy.ndarray): The input image from which the target region will be defined.
-    - points (list of tuples): A list of (x, y) coordinates that define the vertices of the polygonal region.
-
-    Returns:
-    - binary_mask (numpy.ndarray): A binary mask where 1 represents the target region and 0 represents the rest.
-    - contour (numpy.ndarray): The contour used to create the mask.
-    """
-    
-    # Create the polygon from the provided points
-    contour = np.array([points], dtype=np.int32)
-    
-    # Create the mask of the same size as the image
+    # Create a mask with the same size as the input image
     mask = np.zeros(image.shape[:2], dtype=np.uint8)
 
-    # Fill the polygon in the mask with 255
-    cv2.fillPoly(mask, contour, 255)
+    # Fill the polygonal area in the mask with the value 1
+    cv2.fillPoly(mask, [contour], 1)  # Pass a list of contours
 
-    # Create a binary mask (1 for region, 0 for outside)
-    binary_mask = np.zeros_like(mask, dtype=np.uint8)
-    binary_mask[mask == 255] = 1
+    # Create a binary mask where the region inside the polygon is 1, and outside is 0
+    binary_mask = (mask > 0).astype(np.uint8)
 
-    return binary_mask, contour
+    # Find the contours of the filled polygonal region
+    contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+    # Initialize contour_sets
+    contour_sets = []
+
+    if contours:
+        first_contour = contours[0]
+        
+        # Convert contour points to a list of tuples (x, y)
+        contour_sets = [(point[0][0], point[0][1]) for point in first_contour]
+
+    return binary_mask, contour_sets
+
+def get_fill_front(mask): 
+    """
+    Returns the position of the pixels in the fill front.
+    ** Instruction: Use OpenCV function connected_componnents?
+    """
+    ## First strategy: Use simple gradient
+
+    # left 
+    mask_shifted = np.roll(mask, axis=1, shift = -1)
+    mask_shifted[:, -1] = 0
+    gradx1 = abs(mask - mask_shifted)
+
+    # right
+    mask_shifted = np.roll(mask, axis=1, shift = 1)
+    mask_shifted[:, 0] = 0
+    gradx2 = abs(mask - mask_shifted)
+
+    # up
+    mask_shifted = np.roll(mask, axis=0, shift = -1)
+    mask_shifted[-1, :] = 0
+    grady1 = abs(mask - mask_shifted)
+
+    # down
+    mask_shifted = np.roll(mask, axis=0, shift = 1)
+    mask_shifted[0, :] = 0
+    grady2 = abs(mask - mask_shifted)
+
+    border = (gradx1 + gradx2 + grady1 + grady2) * mask
+    border[border >= 1] = 1
+    border_indices = np.where(border == 1)
+    
+    return border, list(zip(border_indices[0], border_indices[1]))
 
 
 def get_matrix_image(image, binary_mask):
@@ -87,43 +114,283 @@ def get_matrix_image(image, binary_mask):
     - image_with_target_region (numpy.ndarray): Image where the target region is highlighted.
     """
     
-    # Create a copy of the image where the target region will be highlighted
     image_with_target_region = np.ones_like(image) * 255 
     image_with_target_region[binary_mask == 0] = image[binary_mask == 0]
 
     return image_with_target_region
 
 
-
-
-### Main ###
-
-if __name__ == "__main__":
+def extract_window(pixel, window_size, matrix, binary_mask):
+    """
+    Extracts the coordinates of the pixels in a window around a given pixel
+    and retrieves the corresponding values from the given matrix, considering a binary mask.
     
-    drawing = False
-    points = [] 
+    Parameters:
+    pixel (tuple): A tuple (x, y) representing the coordinates of the central pixel.
+    window_size (int): The size of the window (must be an odd number for a symmetric patch).
+    matrix (np.ndarray): A 2D array representing the matrix from which to extract values.
+    binary_mask (np.ndarray): A binary mask of the same shape as `matrix`, where 1 indicates
+                              positions to be treated as NaN in `matrix`.
+    
+    Returns:
+    tuple: A tuple containing two elements:
+        - list: A list of tuples representing the coordinates of the pixels in the window around the given pixel.
+        - list: A list of values from the matrix corresponding to the extracted window coordinates,
+                with NaN where the binary_mask has 1s.
+    """
+    x, y = pixel
+    half_window = window_size // 2
 
-    # Load the image
-    image = cv2.imread('image-inpainting/images/aerien1.tif')
-    img_copy = image.copy()
+    # Define the effective matrix by setting NaN where binary_mask is 1
+    effective_matrix = np.where(binary_mask == 1, np.nan, matrix)
+    
+    # Create ranges for rows and columns within the window
+    row_range = np.arange(max(0, x - half_window), min(matrix.shape[0], x + half_window + 1))
+    col_range = np.arange(max(0, y - half_window), min(matrix.shape[1], y + half_window + 1))
+    
+    # Create a grid of coordinates using NumPy's meshgrid
+    row_coords, col_coords = np.meshgrid(row_range, col_range, indexing='ij')
+    
+    # Flatten the coordinates to match the expected output format
+    window_coordinates = list(zip(row_coords.ravel(), col_coords.ravel()))
+    window_values = effective_matrix[row_coords, col_coords].ravel().tolist()
+    
+    return window_coordinates, window_values
 
-    # Display the image and set up the mouse callback
+
+def calculate_confidence(confidence_matrix, window_coordinates):
+    """
+    Calculate the confidence value based on the surrounding patch defined by window coordinates.
+    
+    Parameters:
+    confidence_matrix (np.ndarray): A matrix representing the confidence values of each pixel.
+    window_coordinates (list): A list of tuples representing the coordinates of the pixels in the window.
+    
+    Returns:
+    float: The calculated confidence value as the average of the values in the window.
+    """
+
+    sum_confidence = 0.0
+    
+    for (x, y) in window_coordinates:
+        sum_confidence += confidence_matrix[x, y]
+
+    confidence_value = sum_confidence / len(window_coordinates)
+    
+    return confidence_value
+
+
+# def calculate_data(image, mask_target_region, pixel): # Pedro
+#     """
+#     Calculates the data term associated with a pixel.
+
+#     D = norm of the scalar produt between the orthogonal of the gradient of the image in the point p 
+#     and the normal of the target region border in the point p, all divided by alpha (= 255 for a typical
+#     grey-level image)?
+
+#     OKAY?
+#     """
+#     return data_value
+
+
+def calculate_priorities(confidence: np.ndarray, data: np.ndarray):
+    """
+    Calculates the priority values for each pixel in the fill front.
+
+    The function takes two vectors as input: 'confidence' and 'data', which correspond to the confidence values
+    and data terms for the pixels in the fill front, respectively. It computes the priority for each pixel using
+    the formula P = C * D, where C is the confidence value and D is the data term.
+
+    Parameters:
+    confidence (np.ndarray): A vector of confidence values for the pixels in the fill front.
+    data (np.ndarray): A vector of data terms for the pixels in the fill front.
+
+    Returns:
+    int: The index of the pixel with the highest priority.
+    """
+
+    # Compute priority values
+    priority_values = confidence * data
+
+    # Find the index of the maximum priority value
+    index_max_priority = np.argmax(priority_values)
+
+    return index_max_priority
+
+
+def extract_patches(image, window_size):
+    N, S = image.shape
+    m = window_size
+    
+    num_patches = (N - m + 1) * (S - m + 1)
+    patches = np.zeros((num_patches, m * m))
+    
+    patch_views = np.lib.stride_tricks.sliding_window_view(image, (m, m))
+    
+    patches = patch_views.reshape((num_patches, m * m))
+
+    return patches
+
+
+def patch_matching(image_unfilled, loaded_mask, patch_values, window_size):
+    """
+    This function identifies the optimal fill values for unfilled areas of an image 
+    using the sum of squared differences (SSD) between patches from the unfilled image 
+    and given patch values.
+
+    Parameters:
+    - image_unfilled (numpy.ndarray): The image that contains unfilled areas to be filled.
+    - loaded_mask (numpy.ndarray): A binary mask indicating the unfilled areas (1 for unfilled, 0 for filled).
+    - patch_values (list or numpy.ndarray): A list or array of patch values to compare against.
+    - window_size (int): The size of the patch to be extracted from the image.
+
+    Returns:
+    - fill_values (numpy.ndarray): The optimal fill values identified from the patches.
+    """
+    # Create a copy of the unfilled image and convert to uint16 type
+    image_matching = image_unfilled.copy()
+    image_matching = image_matching.astype(np.uint16)
+
+    # Set the values of the unfilled areas to a high number (10000)
+    image_matching[loaded_mask == 1] = 10000
+    
+    # Extract patches from the modified image
+    image_patches = extract_patches(image_matching, window_size)
+
+    # Convert patch values to a numpy array
+    patch_values_array = np.array(patch_values)
+    image_patches_array = np.array(image_patches)
+
+    # Calculate the squared differences between the patch values and the extracted patches
+    diff_squared = (patch_values_array - image_patches_array)
+    diff_squared_num_squared = np.nan_to_num(diff_squared, nan=0) ** 2
+
+    # Calculate the sum of squared differences (SSD) for each patch
+    ssd_vector = np.sum(diff_squared_num_squared, axis=0)
+
+    # Identify the index of the patch with the minimum SSD
+    min_index = np.argmin(ssd_vector)
+
+    # Return the optimal fill values from the identified patch
+    fill_values = image_patches[min_index]
+
+    return fill_values
+
+
+def create_test_csv(image, csv_name):
+    """
+    Function to process an image by selecting points and creating a binary mask.
+    
+    Parameters:
+        image (numpy.ndarray): The input image on which the processing will be performed.
+        
+    This function allows the user to select points on the image, creates a binary mask 
+    based on the selected region, and visualizes the results, including the target 
+    region's contour and the unfilled matrix.
+    
+    The user can exit the selection mode by pressing 'q'. If at least three points 
+    are selected, it saves the binary mask to a CSV file and displays:
+    - The binary mask scaled to 255 for visibility
+    - The contour of the selected region on the original image
+    - The unfilled matrix (original image with the selected region masked)
+    """
+    points = []  # List to store selected points
+
+    # Display the image and set the mouse callback for point selection
     cv2.imshow('Image', image)
     cv2.setMouseCallback('Image', select_points)
 
-    # Wait for the user to finish selecting points
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+
     while True:
         key = cv2.waitKey(1) & 0xFF 
         if key == ord('q'):
             break
 
-    # After point selection, obtain the target region matrices
-    if len(points) >= 3: 
+    if len(points) >= 3:
         binary_mask, contour = get_matrix_mask(image, points)
+
+        # Save the binary mask to a CSV file
+        np.savetxt(f'../test_files/{csv_name}.csv', binary_mask, delimiter=",")
+
+        # Show the binary mask scaled to 255
+        cv2.imshow('Target Region', binary_mask * 255)  
         
+        # Draw the contour on the original image
+        cv2.drawContours(image, [np.array(contour, dtype=np.int32)], -1, (0, 0, 255), 2)
+        cv2.imshow('Contour', image)
+
+        # Create and display the unfilled matrix (background)
+        image_unfilled = image * (1 - binary_mask[:, :, np.newaxis])
+        cv2.imshow('Unfilled Matrix', image_unfilled)
+
         cv2.waitKey(0)
 
     cv2.destroyAllWindows()
+ 
 
-    # Initial confidence matrix 
-    confidence_matrix = np.ones_like(binary_mask, dtype=np.uint8) - binary_mask
+
+### Main ###
+
+if __name__ == "__main__":
+    drawing = False
+    points = []
+
+    window_size = 5
+
+    # Load the image
+    image = cv2.imread('images/bateau.jpg', cv2.IMREAD_GRAYSCALE)
+    img_copy = image.copy()
+
+    loaded_mask = np.loadtxt("test_files/binary_mask_bateau.csv", delimiter=",")
+    loaded_mask = loaded_mask.astype(int)
+    show = loaded_mask.copy()
+
+    image_unfilled = image * (1 - loaded_mask).astype(np.uint8)
+    image_unfilled_nan = np.where(image_unfilled == 0, np.nan, image_unfilled)
+
+    cv2.imshow('Image Unfilled', (image_unfilled).astype(np.uint8))
+
+    # Initial confidence matrix
+    confidence_matrix = np.ones_like(loaded_mask, dtype=np.float32) - loaded_mask
+
+
+    while(len(loaded_mask[loaded_mask == 1]) != 0):
+        confidence_fill_front = np.empty((0,))
+        data_fill_front = np.empty((0,))
+        
+        contour, points_contour = get_fill_front(loaded_mask)
+
+        for pixel in points_contour:
+            window_coordinates, _ = extract_window(pixel, window_size, image_unfilled, loaded_mask)
+            pixel_confidence = calculate_confidence(confidence_matrix, window_coordinates)
+            pixel_data = np.random.rand() ## ADICIONAR A SUA FUNÇÃO!!!!!
+
+            confidence_fill_front = np.append(confidence_fill_front, pixel_confidence)
+            data_fill_front = np.append(data_fill_front, pixel_data)
+
+        # Find the patch with highest priority
+        index_highest_priority = calculate_priorities(confidence_fill_front, data_fill_front)
+        pixel_highest_priority = points_contour[index_highest_priority]
+        patch_coordinates, patch_values = extract_window(pixel_highest_priority, window_size, image_unfilled, loaded_mask)
+
+        # Patch matching
+        fill_values = patch_matching(image_unfilled, loaded_mask, patch_values, window_size)
+        nan_indices = np.isnan(patch_values)
+
+        for idx, (x, y) in enumerate(patch_coordinates):
+            if nan_indices[idx]: 
+                image_unfilled[x, y] = fill_values[idx]
+
+                loaded_mask[x, y] = 0
+                confidence_matrix[x, y] = confidence_fill_front[index_highest_priority]
+
+
+    show_uint8 = (show * 255).astype(np.uint8)
+    cv2.imshow('Updated Image', image_unfilled)
+    cv2.imshow('Initial Image', show_uint8)
+    cv2.imshow('Loaded mask', (loaded_mask*255).astype(np.uint8))
+    cv2.imshow('Confidence', (confidence_matrix * 255).astype(np.uint8))
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
