@@ -179,18 +179,112 @@ def calculate_confidence(confidence_matrix, window_coordinates):
     
     return confidence_value
 
+def calculate_data(image, mask, p, d, sigma): 
+    """
+    Calculates the data term associated with a pixel.
+    D = norm of the scalar produt between the orthogonal of the gradient of the image in the point p 
+    and the normal of the target region border in the point p, all divided by alpha?
 
-# def calculate_data(image, mask_target_region, pixel): # Pedro
-#     """
-#     Calculates the data term associated with a pixel.
+    Parameters:
+    - image (numpy.ndarray): The input image.
+    - mask (numpy.ndarray): The binary mask with 1's for the target region and 0's for the rest. 
+    - d: dimension of the region to consider for the aproximation calculation. 
+    - sigma: standard deviation of the gaussian kernell
 
-#     D = norm of the scalar produt between the orthogonal of the gradient of the image in the point p 
-#     and the normal of the target region border in the point p, all divided by alpha (= 255 for a typical
-#     grey-level image)?
+    Returns:
+    int: data term
+    """
+    gradient = calculate_gradient(image, mask, p, d, sigma)
+    orthogonal = (-gradient[1], gradient[0])
+    normal = calculate_normal(mask, p, d)
+    alpha = 1080
 
-#     OKAY?
-#     """
-#     return data_value
+    data = abs(orthogonal @ normal) / alpha
+
+    return data
+
+def calculate_gradient(image, mask, p, d, sigma):
+    """
+    Calculates the gradient of the image at a point p of the target region border. The estimation is done over a region around p.
+    Using a gaussian kernell to weight their contribution.
+
+    Parameters:
+    - image (numpy.ndarray): The input image.
+    - mask (numpy.ndarray): The binary mask with 1's for the target region and 0's for the rest. 
+    - p (tuple): Tuple with the coordenates of the point in which we calculate the data term.
+    - d: dimension of the region to consider for the aproximation calculation. 
+    - sigma: standard deviation of the gaussian kernell
+
+    Returns:
+    tuple: Vector (x, y) representing the gradient
+    """
+    mask = 255 - mask
+    region = image[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
+    region_mask = mask[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
+
+    grad_x_region = cv2.Sobel(region, cv2.CV_64F, 1, 0, ksize=3)
+    grad_y_region = cv2.Sobel(region, cv2.CV_64F, 0, 1, ksize=3)
+
+    """
+    constant_kernell = region_mask / sum(region_mask)
+    grad_x = sum(constant_kernell * grad_x_region)
+    grad_y = sum(constant_kernell * grad_y_region)
+    """
+
+    x_i = max(p[0]-d, 0)
+    x_f = min(p[0]+d, mask.shape[0]-1)
+    y_i = max(p[1]-d, 0)
+    y_f = min(p[1]+d, mask.shape[1]-1)
+
+    x_left = p[0] - x_i
+    x_right = x_f - p[0]
+    y_up = p[1] - y_i
+    y_down = y_f - p[1]
+
+    # Gaussian kernel
+    kernel_1d = cv2.getGaussianKernel(2*d+1, sigma) 
+    kernel = np.outer(kernel_1d, kernel_1d)
+    
+    p_k = (d, d)
+
+    kernel = kernel[p_k[0] - x_left : p_k[0] + x_right + 1, p_k[1] - y_up : p_k[1] + y_down + 1]
+    kernel = kernel * region_mask
+    kernel = kernel / np.sum(kernel)
+
+    grad_x = np.sum(kernel * grad_x_region)
+    grad_y = np.sum(kernel * grad_y_region)
+
+    return (grad_x, grad_y)
+
+def calculate_normal(mask, p, d):
+    """
+    Returns the vector normal to the border of the target region in the point p. Norm equals 1. 
+    The estimation is done calculating over a square around p, summing the gradient of all pixels in that area.
+
+    Parameters:
+    - binary_mask (numpy.ndarray): The binary mask with 1's for the target region and 0's for the rest.
+    - p (tuple): Tuple with the coordenates of the point in which we calculate the normal
+    - d (int): "Window size" around p for which we consider to estimate the normal 
+
+    Returns:
+    tuple: Vector (x, y) of unitary norm 
+
+    """
+    mask = 1 - mask
+
+    rigth_col = mask[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, min(p[1]+d, mask.shape[1])]
+    left_col = mask[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, max(p[1]+d, 0)]
+
+    gradx = sum(rigth_col - left_col)
+
+    bottom_row = mask[min(p[0]+d, mask.shape[0]-1),max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
+    top_row = mask[max(p[0]-d, 0),max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
+
+    grady = sum(bottom_row - top_row)
+
+    normal = (gradx, grady) / np.sqrt(gradx**2 + grady**2)
+
+    return normal
 
 
 def calculate_priorities(confidence: np.ndarray, data: np.ndarray):
