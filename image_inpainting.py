@@ -197,7 +197,7 @@ def calculate_data(image, mask, p, d, sigma):
     gradient = calculate_gradient(image, mask, p, d, sigma)
     orthogonal = (-gradient[1], gradient[0])
     normal = calculate_normal(mask, p, d)
-    alpha = 1080
+    alpha = 500
 
     data = abs(orthogonal @ normal) / alpha
 
@@ -272,17 +272,20 @@ def calculate_normal(mask, p, d):
     """
     mask = 1 - mask
 
-    rigth_col = mask[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, min(p[1]+d, mask.shape[1])]
+    right_col = mask[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, min(p[1]+d, mask.shape[1])]
     left_col = mask[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, max(p[1]+d, 0)]
 
-    gradx = sum(rigth_col - left_col)
+    gradx = sum(right_col - left_col)
 
-    bottom_row = mask[min(p[0]+d, mask.shape[0]-1),max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
-    top_row = mask[max(p[0]-d, 0),max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
+    bottom_row = mask[min(p[0]+d, mask.shape[0]-1), max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
+    top_row = mask[max(p[0]-d, 0), max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
 
     grady = sum(bottom_row - top_row)
 
-    normal = (gradx, grady) / np.sqrt(gradx**2 + grady**2)
+    if gradx == 0 and grady == 0:
+        normal = np.array([0, 0])
+    else:
+        normal = np.array([gradx, grady]) / np.sqrt(gradx**2 + grady**2)
 
     return normal
 
@@ -431,7 +434,7 @@ if __name__ == "__main__":
     drawing = False
     points = []
 
-    window_size = 5
+    window_size = 7
 
     # Load the image
     image = cv2.imread('images/bateau.jpg', cv2.IMREAD_GRAYSCALE)
@@ -449,8 +452,8 @@ if __name__ == "__main__":
     # Initial confidence matrix
     confidence_matrix = np.ones_like(loaded_mask, dtype=np.float32) - loaded_mask
 
-
-    while(len(loaded_mask[loaded_mask == 1]) != 0):
+    for _ in range(1):
+    #while(len(loaded_mask[loaded_mask == 1]) != 0):
         confidence_fill_front = np.empty((0,))
         data_fill_front = np.empty((0,))
         
@@ -459,10 +462,14 @@ if __name__ == "__main__":
         for pixel in points_contour:
             window_coordinates, _ = extract_window(pixel, window_size, image_unfilled, loaded_mask)
             pixel_confidence = calculate_confidence(confidence_matrix, window_coordinates)
-            pixel_data = calculate_data(image, loaded_mask, pixel, 5, 1) 
+            pixel_data = calculate_data(image, loaded_mask, pixel, 2, 1) 
 
             confidence_fill_front = np.append(confidence_fill_front, pixel_confidence)
             data_fill_front = np.append(data_fill_front, pixel_data)
+
+        # max_data_index = np.argmax(data_fill_front)
+        # max_data = points_contour[max_data_index]
+        # print(max_data)
 
         # Find the patch with highest priority
         index_highest_priority = calculate_priorities(confidence_fill_front, data_fill_front)
