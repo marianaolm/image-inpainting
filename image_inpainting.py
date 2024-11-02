@@ -1,6 +1,10 @@
 import cv2
 import numpy as np
 import os
+import matplotlib.pyplot as plt
+import skimage.io as skio
+import skimage
+import skimage.morphology as morpho
 
 ### Functions ###
 
@@ -69,32 +73,37 @@ def get_fill_front(mask):
     Returns the position of the pixels in the fill front.
     ** Instruction: Use OpenCV function connected_componnents?
     """
-    ## First strategy: Use simple gradient
+    ## First stupid strategy: Use simple gradient
 
-    # left 
-    mask_shifted = np.roll(mask, axis=1, shift = -1)
-    mask_shifted[:, -1] = 0
-    gradx1 = abs(mask - mask_shifted)
+    # # left 
+    # mask_shifted = np.roll(mask, axis=1, shift = -1)
+    # mask_shifted[:, -1] = 0
+    # gradx1 = abs(mask - mask_shifted)
 
-    # right
-    mask_shifted = np.roll(mask, axis=1, shift = 1)
-    mask_shifted[:, 0] = 0
-    gradx2 = abs(mask - mask_shifted)
+    # # right
+    # mask_shifted = np.roll(mask, axis=1, shift = 1)
+    # mask_shifted[:, 0] = 0
+    # gradx2 = abs(mask - mask_shifted)
 
-    # up
-    mask_shifted = np.roll(mask, axis=0, shift = -1)
-    mask_shifted[-1, :] = 0
-    grady1 = abs(mask - mask_shifted)
+    # # up
+    # mask_shifted = np.roll(mask, axis=0, shift = -1)
+    # mask_shifted[-1, :] = 0
+    # grady1 = abs(mask - mask_shifted)
 
-    # down
-    mask_shifted = np.roll(mask, axis=0, shift = 1)
-    mask_shifted[0, :] = 0
-    grady2 = abs(mask - mask_shifted)
+    # # down
+    # mask_shifted = np.roll(mask, axis=0, shift = 1)
+    # mask_shifted[0, :] = 0
+    # grady2 = abs(mask - mask_shifted)
 
-    border = (gradx1 + gradx2 + grady1 + grady2) * mask
-    border[border >= 1] = 1
+    # border = (gradx1 + gradx2 + grady1 + grady2) * mask
+    # border[border >= 1] = 1
+    # border_indices = np.where(border == 1)
+
+    # Better strategy: Use erosion
+    erosion = morpho.binary_erosion(mask, morpho.square(3)) 
+    border = mask - erosion
     border_indices = np.where(border == 1)
-    
+
     return border, list(zip(border_indices[0], border_indices[1]))
 
 
@@ -186,7 +195,7 @@ def calculate_data(image, mask, p, d, sigma):
     and the normal of the target region border in the point p, all divided by alpha?
 
     Parameters:
-    - image (numpy.ndarray): The input image.
+    - image (numpy.ndarray): The unfilled image. Has to be the image we are filling which is different from the original
     - mask (numpy.ndarray): The binary mask with 1's for the target region and 0's for the rest. 
     - d: dimension of the region to consider for the aproximation calculation. 
     - sigma: standard deviation of the gaussian kernell
@@ -197,13 +206,35 @@ def calculate_data(image, mask, p, d, sigma):
     gradient = calculate_gradient(image, mask, p, d, sigma)
     orthogonal = (-gradient[1], gradient[0])
     normal = calculate_normal(mask, p, d)
-    alpha = 500
+    alpha = 200  ##########
 
     data = abs(orthogonal @ normal) / alpha
 
     return data
+    
+# def calculate_gradient(image_unfilled, mask, p, d, sigma): # without worring about begin clode to the border of the image
+#     image = cv2.medianBlur(image_unfilled, ksize=3)
 
-def calculate_gradient(image, mask, p, d, sigma):
+#     mask = 255 - mask
+#     region = image[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
+#     region_mask = mask[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
+
+#     grad_x_region = cv2.Sobel(region, cv2.CV_64F, 1, 0, ksize=3)
+#     grad_y_region = cv2.Sobel(region, cv2.CV_64F, 0, 1, ksize=3)
+
+#     kernel_1d = cv2.getGaussianKernel(2*d+1, sigma) 
+#     kernel = np.outer(kernel_1d, kernel_1d)
+
+#     kernel = kernel * region_mask
+#     kernel = kernel / np.sum(kernel)
+
+#     grad_x = np.sum(kernel * abs(grad_x_region))
+#     grad_y = np.sum(kernel * abs(grad_y_region))
+
+#     return (grad_x, grad_y)
+
+
+def calculate_gradient(image_unfilled, mask, p, d, sigma):
     """
     Calculates the gradient of the image at a point p of the target region border. The estimation is done over a region around p.
     Using a gaussian kernell to weight their contribution.
@@ -218,6 +249,11 @@ def calculate_gradient(image, mask, p, d, sigma):
     Returns:
     tuple: Vector (x, y) representing the gradient
     """
+    image = cv2.medianBlur(image_unfilled, ksize=3)
+    #mask = morpho.binary_dilation(mask, morpho.disk(1)) 
+    # as the pixels touching the target region gonna have "false" gradient because of the region of zeros they are next to
+    # or it is not necessary because this parasite gradiente is in the same direction as the normal of the fill front???
+
     mask = 255 - mask
     region = image[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
     region_mask = mask[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
@@ -251,8 +287,8 @@ def calculate_gradient(image, mask, p, d, sigma):
     kernel = kernel * region_mask
     kernel = kernel / np.sum(kernel)
 
-    grad_x = np.sum(kernel * grad_x_region)
-    grad_y = np.sum(kernel * grad_y_region)
+    grad_x = np.sum(kernel * abs(grad_x_region))
+    grad_y = np.sum(kernel * abs(grad_y_region))
 
     return (grad_x, grad_y)
 
@@ -272,8 +308,8 @@ def calculate_normal(mask, p, d):
     """
     mask = 1 - mask
 
-    right_col = mask[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, min(p[1]+d, mask.shape[1])]
-    left_col = mask[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, max(p[1]+d, 0)]
+    right_col = mask[max(p[0]-d, 0) : min(p[0]+d+1, mask.shape[0]), min(p[1]+1, mask.shape[1]-1)]
+    left_col = mask[max(p[0]-d, 0) : min(p[0]+d+1, mask.shape[0]), max(p[1]-1, 0)]
 
     gradx = sum(right_col - left_col)
 
@@ -437,10 +473,12 @@ if __name__ == "__main__":
     window_size = 7
 
     # Load the image
-    image = cv2.imread('images/bateau.jpg', cv2.IMREAD_GRAYSCALE)
+    image = cv2.imread('images/shapes_image.png', cv2.IMREAD_GRAYSCALE)
+    #image = cv2.imread('images/bateau.jpg', cv2.IMREAD_GRAYSCALE)
     img_copy = image.copy()
 
-    loaded_mask = np.loadtxt("test_files/binary_mask_bateau.csv", delimiter=",")
+    loaded_mask = np.loadtxt("test_files/binary_mask_shapes.csv", delimiter=",")
+    #loaded_mask = np.loadtxt("test_files/binary_mask_bateau.csv", delimiter=",")
     loaded_mask = loaded_mask.astype(int)
     show = loaded_mask.copy()
 
@@ -456,20 +494,76 @@ if __name__ == "__main__":
     #while(len(loaded_mask[loaded_mask == 1]) != 0):
         confidence_fill_front = np.empty((0,))
         data_fill_front = np.empty((0,))
-        
+
+        normal_fill_front = np.empty((0, 2)) #
+        gradient_fill_front = np.empty((0, 2)) #
+
         contour, points_contour = get_fill_front(loaded_mask)
 
         for pixel in points_contour:
             window_coordinates, _ = extract_window(pixel, window_size, image_unfilled, loaded_mask)
             pixel_confidence = calculate_confidence(confidence_matrix, window_coordinates)
-            pixel_data = calculate_data(image, loaded_mask, pixel, 2, 1) 
+            pixel_data = calculate_data(image, loaded_mask, pixel, 2, 1)  ######use image_unfilled
+
+            #------------para Print Normal e gradiente------------------------#
+            pixel_normal = calculate_normal(loaded_mask, pixel, 4)
+            pixel_gradient = calculate_gradient(image_unfilled, loaded_mask, pixel, 2, 1)
+
+            normal_fill_front = np.vstack([normal_fill_front, pixel_normal])
+            gradient_fill_front = np.vstack([gradient_fill_front, pixel_gradient])
+            #-----------------------------X-----------------------------------#
 
             confidence_fill_front = np.append(confidence_fill_front, pixel_confidence)
             data_fill_front = np.append(data_fill_front, pixel_data)
 
-        # max_data_index = np.argmax(data_fill_front)
-        # max_data = points_contour[max_data_index]
-        # print(max_data)
+        #--------------------Print Normal e Gradiente-------------------------------------#
+        # img_height = 256
+        # img_width = 256
+
+        # # Vetor de coordenadas (y, x) dos pixels onde queremos plotar vetores
+        # coords = np.array(points_contour)
+
+        # vectors = np.array(gradient_fill_front) / 30
+
+        # # Cria uma matriz de zeros com o tamanho da imagem para plotagem
+        # image_teste_arrows = np.zeros((img_height, img_width))
+
+        # # Plotar a imagem base como um fundo preto
+        # plt.imshow(image_teste_arrows, cmap='gray', extent=(0, img_width, img_height, 0))
+
+        # # Extrair as coordenadas e os vetores correspondentes
+        # y_coords, x_coords = coords[:, 0], coords[:, 1]
+        # dy, dx = vectors[:, 1], vectors[:, 0]
+
+        # # Plotar as setas (vetores) nas posições especificadas
+        # plt.quiver(x_coords, y_coords, dx, dy, angles='xy', scale_units='xy', scale=1, color='red')
+
+        # # Ajustar e exibir a imagem
+        # plt.title("Representação de Vetores na Imagem")
+        # plt.xlim(0, img_width)
+        # plt.ylim(img_height, 0)
+        # plt.gca().set_aspect('equal', adjustable='box')
+        # plt.show()
+
+        #-------------------- Print dos valores de data ---------------------------#
+        # # Defina as dimensões da imagem (altura, largura)
+        # img_height = 256
+        # img_width = 256
+
+        # # Cria uma matriz de zeros com o tamanho da imagem
+        # image_testeee = np.zeros((img_height, img_width))
+
+        # # Atribui os valores às coordenadas especificadas
+        # for (y, x), value in zip(points_contour, data_fill_front):
+        #     image_testeee[y, x] = value
+
+        # # Plot da imagem resultante
+        # plt.imshow(image_testeee, cmap='gray')
+        # plt.colorbar()
+        # plt.title("Imagem com Valores de Data")
+        # plt.show()
+        #--------------------------------X-----------------------------------------#
+
 
         # Find the patch with highest priority
         index_highest_priority = calculate_priorities(confidence_fill_front, data_fill_front)
@@ -489,9 +583,13 @@ if __name__ == "__main__":
 
 
     show_uint8 = (show * 255).astype(np.uint8)
+    image_unfilled = cv2.resize(image_unfilled, (200, 200))
     cv2.imshow('Updated Image', image_unfilled)
+    show_uint8 = cv2.resize(show_uint8, (200, 200))
     cv2.imshow('Initial Image', show_uint8)
-    cv2.imshow('Loaded mask', (loaded_mask*255).astype(np.uint8))
-    cv2.imshow('Confidence', (confidence_matrix * 255).astype(np.uint8))
+    loaded_mask = cv2.resize((loaded_mask*255).astype(np.uint8), (200, 200))
+    cv2.imshow('Loaded mask', loaded_mask)
+    confidence_matrix = cv2.resize((confidence_matrix * 255).astype(np.uint8), (200, 200))
+    cv2.imshow('Confidence', confidence_matrix)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
