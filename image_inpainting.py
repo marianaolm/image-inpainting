@@ -369,7 +369,8 @@ def patch_matching(image_unfilled, loaded_mask, patch_values, window_size):
     """
     This function identifies the optimal fill values for unfilled areas of an image 
     using the sum of squared differences (SSD) between patches from the unfilled image 
-    and given patch values.
+    and given patch values, ignoring areas marked as NaN in patch_values and avoiding 
+    patches that contain unfilled regions according to loaded_mask.
 
     Parameters:
     - image_unfilled (numpy.ndarray): The image that contains unfilled areas to be filled.
@@ -380,32 +381,31 @@ def patch_matching(image_unfilled, loaded_mask, patch_values, window_size):
     Returns:
     - fill_values (numpy.ndarray): The optimal fill values identified from the patches.
     """
-    # Create a copy of the unfilled image and convert to uint16 type
-    image_matching = image_unfilled.copy()
-    image_matching = image_matching.astype(np.uint16)
-
-    # Set the values of the unfilled areas to a high number (10000)
-    image_matching[loaded_mask == 1] = 10000
-    
-    # Extract patches from the modified image
-    image_patches = extract_patches(image_matching, window_size)
-
-    # Convert patch values to a numpy array
-    patch_values_array = np.array(patch_values)
+    # Extract patches from the unfilled image
+    image_patches = extract_patches(image_unfilled, window_size)
     image_patches_array = np.array(image_patches)
 
-    # Calculate the squared differences between the patch values and the extracted patches
-    diff_squared = (patch_values_array - image_patches_array)
-    diff_squared_num_squared = np.nan_to_num(diff_squared, nan=0) ** 2
+    # Convert patch values to a numpy array and create a mask for NaN values in patch_values
+    patch_values_array = np.array(patch_values)
+    valid_mask = ~np.isnan(patch_values_array)  # True where values in patch_values are not NaN
 
-    # Calculate the sum of squared differences (SSD) for each patch
-    ssd_vector = np.sum(diff_squared_num_squared, axis=0)
+    # Filter out any patches that correspond to unfilled areas in the loaded_mask
+    loaded_mask_patches = extract_patches(loaded_mask, window_size)
+    loaded_mask_patches_array = np.array(loaded_mask_patches)
+    valid_patches_mask = np.all(loaded_mask_patches_array == 0, axis=1)  # Only fully filled patches
+
+    valid_image_patches = image_patches_array[valid_patches_mask]
+
+    # Compute SSD only over valid (non-NaN) values
+    diff = (valid_image_patches - patch_values_array) * valid_mask  # Ignores NaNs
+    diff_squared = np.nan_to_num(diff, nan=0) ** 2
+    ssd_vector = np.sum(diff_squared, axis=1)  # Sum over valid positions only
 
     # Identify the index of the patch with the minimum SSD
     min_index = np.argmin(ssd_vector)
 
     # Return the optimal fill values from the identified patch
-    fill_values = image_patches[min_index]
+    fill_values = valid_image_patches[min_index]
 
     return fill_values
 
@@ -470,20 +470,24 @@ if __name__ == "__main__":
     drawing = False
     points = []
 
-    window_size = 7
+    window_size = 9
+
 
     # Load the image
-    image = cv2.imread('images/shapes_image.png', cv2.IMREAD_GRAYSCALE)
+    #image = cv2.imread('images/chile.png', cv2.IMREAD_GRAYSCALE)
+    #image = cv2.imread('images/shapes_image.png', cv2.IMREAD_GRAYSCALE)
     #image = cv2.imread('images/bateau.jpg', cv2.IMREAD_GRAYSCALE)
+    image = cv2.imread('images/duck_256.jpg', cv2.IMREAD_GRAYSCALE)
     img_copy = image.copy()
 
-    loaded_mask = np.loadtxt("test_files/binary_mask_shapes.csv", delimiter=",")
+    #loaded_mask = np.loadtxt("test_files/binary_mask_chile_sinal.csv", delimiter=",")
+    #loaded_mask = np.loadtxt("test_files/binary_mask_shapes.csv", delimiter=",")
     #loaded_mask = np.loadtxt("test_files/binary_mask_bateau.csv", delimiter=",")
+    loaded_mask = np.loadtxt("test_files/binary_mask_duck.csv", delimiter=",")
     loaded_mask = loaded_mask.astype(int)
     show = loaded_mask.copy()
 
     image_unfilled = image * (1 - loaded_mask).astype(np.uint8)
-    image_unfilled_nan = np.where(image_unfilled == 0, np.nan, image_unfilled)
 
     cv2.imshow('Image Unfilled', (image_unfilled).astype(np.uint8))
 
@@ -506,11 +510,11 @@ if __name__ == "__main__":
             pixel_data = calculate_data(image, loaded_mask, pixel, 2, 1)  ######use image_unfilled
 
             #------------para Print Normal e gradiente------------------------#
-            pixel_normal = calculate_normal(loaded_mask, pixel, 4)
-            pixel_gradient = calculate_gradient(image_unfilled, loaded_mask, pixel, 2, 1)
+            # pixel_normal = calculate_normal(loaded_mask, pixel, 4)
+            # pixel_gradient = calculate_gradient(image_unfilled, loaded_mask, pixel, 2, 1)
 
-            normal_fill_front = np.vstack([normal_fill_front, pixel_normal])
-            gradient_fill_front = np.vstack([gradient_fill_front, pixel_gradient])
+            # normal_fill_front = np.vstack([normal_fill_front, pixel_normal])
+            # gradient_fill_front = np.vstack([gradient_fill_front, pixel_gradient])
             #-----------------------------X-----------------------------------#
 
             confidence_fill_front = np.append(confidence_fill_front, pixel_confidence)
@@ -583,13 +587,13 @@ if __name__ == "__main__":
 
 
     show_uint8 = (show * 255).astype(np.uint8)
-    image_unfilled = cv2.resize(image_unfilled, (200, 200))
+    #image_unfilled = cv2.resize(image_unfilled, (200, 200))
     cv2.imshow('Updated Image', image_unfilled)
-    show_uint8 = cv2.resize(show_uint8, (200, 200))
+    #show_uint8 = cv2.resize(show_uint8, (200, 200))
     cv2.imshow('Initial Image', show_uint8)
-    loaded_mask = cv2.resize((loaded_mask*255).astype(np.uint8), (200, 200))
-    cv2.imshow('Loaded mask', loaded_mask)
-    confidence_matrix = cv2.resize((confidence_matrix * 255).astype(np.uint8), (200, 200))
-    cv2.imshow('Confidence', confidence_matrix)
+    #loaded_mask = cv2.resize((loaded_mask*255).astype(np.uint8), (200, 200))
+    cv2.imshow('Loaded mask', (loaded_mask*255).astype(np.uint8))
+    #confidence_matrix = cv2.resize((confidence_matrix * 255).astype(np.uint8), (200, 200))
+    cv2.imshow('Confidence', (confidence_matrix * 255).astype(np.uint8))
     cv2.waitKey(0)
     cv2.destroyAllWindows()
