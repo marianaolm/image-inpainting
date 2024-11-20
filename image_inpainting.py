@@ -70,36 +70,11 @@ def get_matrix_mask(image, points):
 
 def get_fill_front(mask): 
     """
-    Returns the position of the pixels in the fill front.
-    ** Instruction: Use OpenCV function connected_componnents?
+    Parameters:
+    - binary_mask (numpy.ndarray): The binary mask with 1's for the target region and 0's for the rest.
+    
+    Returns the matrix with 1's in the position of the pixels in the fill front, and its coordenates.
     """
-    ## First stupid strategy: Use simple gradient
-
-    # # left 
-    # mask_shifted = np.roll(mask, axis=1, shift = -1)
-    # mask_shifted[:, -1] = 0
-    # gradx1 = abs(mask - mask_shifted)
-
-    # # right
-    # mask_shifted = np.roll(mask, axis=1, shift = 1)
-    # mask_shifted[:, 0] = 0
-    # gradx2 = abs(mask - mask_shifted)
-
-    # # up
-    # mask_shifted = np.roll(mask, axis=0, shift = -1)
-    # mask_shifted[-1, :] = 0
-    # grady1 = abs(mask - mask_shifted)
-
-    # # down
-    # mask_shifted = np.roll(mask, axis=0, shift = 1)
-    # mask_shifted[0, :] = 0
-    # grady2 = abs(mask - mask_shifted)
-
-    # border = (gradx1 + gradx2 + grady1 + grady2) * mask
-    # border[border >= 1] = 1
-    # border_indices = np.where(border == 1)
-
-    # Better strategy: Use erosion
     erosion = morpho.binary_erosion(mask, morpho.square(3)) 
     border = mask - erosion
     border_indices = np.where(border == 1)
@@ -192,7 +167,7 @@ def calculate_data(image, mask, p, d, sigma):
     """
     Calculates the data term associated with a pixel.
     D = norm of the scalar produt between the orthogonal of the gradient of the image in the point p 
-    and the normal of the target region border in the point p, all divided by alpha?
+    and the normal of the target region border in the point p, all divided by alpha
 
     Parameters:
     - image (numpy.ndarray): The unfilled image. Has to be the image we are filling which is different from the original
@@ -206,7 +181,7 @@ def calculate_data(image, mask, p, d, sigma):
     gradient = calculate_gradient(image, mask, p, d, sigma)
     orthogonal = (-gradient[1], gradient[0])
     normal = calculate_normal(mask, p, d)
-    alpha = 200  ##########
+    alpha = 200  
 
     data = abs(orthogonal @ normal) / alpha
 
@@ -234,7 +209,7 @@ def calculate_data(image, mask, p, d, sigma):
 #     return (grad_x, grad_y)
 
 
-def calculate_gradient(image_unfilled, mask, p, d, sigma):
+def calculate_gradient(image_unfilled, mask, p, d, sigma, filter = False):
     """
     Calculates the gradient of the image at a point p of the target region border. The estimation is done over a region around p.
     Using a gaussian kernell to weight their contribution.
@@ -243,29 +218,24 @@ def calculate_gradient(image_unfilled, mask, p, d, sigma):
     - image (numpy.ndarray): The input image.
     - mask (numpy.ndarray): The binary mask with 1's for the target region and 0's for the rest. 
     - p (tuple): Tuple with the coordenates of the point in which we calculate the data term.
-    - d: dimension of the region to consider for the aproximation calculation. 
+    - d: dimension of the region to consider for the aproximation calculation. Has to be higher than 1, so there is no division by 0.
     - sigma: standard deviation of the gaussian kernell
 
     Returns:
     tuple: Vector (x, y) representing the gradient
     """
-    image = cv2.medianBlur(image_unfilled, ksize=3)
-    #mask = morpho.binary_dilation(mask, morpho.disk(1)) 
-    # as the pixels touching the target region gonna have "false" gradient because of the region of zeros they are next to
-    # or it is not necessary because this parasite gradiente is in the same direction as the normal of the fill front???
+    image = image_unfilled
+    if filter:
+        image = cv2.medianBlur(image_unfilled, ksize=3)
 
-    mask = 255 - mask
+    mask_dilated = morpho.binary_dilation(mask, morpho.square(3))
+    mask_dilated = 1 - mask_dilated
+
     region = image[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
-    region_mask = mask[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
+    region_mask = mask_dilated[max(p[0]-d, 0) : min(p[0]+d, mask.shape[0]-1)+1, max(p[1]-d, 0) : min(p[1]+d, mask.shape[1]-1)+1]
 
     grad_x_region = cv2.Sobel(region, cv2.CV_64F, 1, 0, ksize=3)
     grad_y_region = cv2.Sobel(region, cv2.CV_64F, 0, 1, ksize=3)
-
-    """
-    constant_kernell = region_mask / sum(region_mask)
-    grad_x = sum(constant_kernell * grad_x_region)
-    grad_y = sum(constant_kernell * grad_y_region)
-    """
 
     x_i = max(p[0]-d, 0)
     x_f = min(p[0]+d, mask.shape[0]-1)
@@ -287,8 +257,8 @@ def calculate_gradient(image_unfilled, mask, p, d, sigma):
     kernel = kernel * region_mask
     kernel = kernel / np.sum(kernel)
 
-    grad_x = np.sum(kernel * abs(grad_x_region))
-    grad_y = np.sum(kernel * abs(grad_y_region))
+    grad_x = np.sum(kernel * grad_x_region)
+    grad_y = np.sum(kernel * grad_y_region)
 
     return (grad_x, grad_y)
 
@@ -308,8 +278,8 @@ def calculate_normal(mask, p, d):
     """
     mask = 1 - mask
 
-    right_col = mask[max(p[0]-d, 0) : min(p[0]+d+1, mask.shape[0]), min(p[1]+1, mask.shape[1]-1)]
-    left_col = mask[max(p[0]-d, 0) : min(p[0]+d+1, mask.shape[0]), max(p[1]-1, 0)]
+    right_col = mask[max(p[0]-d, 0) : min(p[0]+d+1, mask.shape[0]), min(p[1]+d, mask.shape[1]-1)]
+    left_col = mask[max(p[0]-d, 0) : min(p[0]+d+1, mask.shape[0]), max(p[1]-d, 0)]
 
     gradx = sum(right_col - left_col)
 
@@ -470,20 +440,20 @@ if __name__ == "__main__":
     drawing = False
     points = []
 
-    window_size = 9
+    window_size = 5
 
 
     # Load the image
     #image = cv2.imread('images/chile.png', cv2.IMREAD_GRAYSCALE)
-    #image = cv2.imread('images/shapes_image.png', cv2.IMREAD_GRAYSCALE)
+    image = cv2.imread('images/shapes_image.png', cv2.IMREAD_GRAYSCALE)
     #image = cv2.imread('images/bateau.jpg', cv2.IMREAD_GRAYSCALE)
-    image = cv2.imread('images/duck_256.jpg', cv2.IMREAD_GRAYSCALE)
+    #image = cv2.imread('images/duck_256.jpg', cv2.IMREAD_GRAYSCALE)
     img_copy = image.copy()
 
     #loaded_mask = np.loadtxt("test_files/binary_mask_chile_sinal.csv", delimiter=",")
-    #loaded_mask = np.loadtxt("test_files/binary_mask_shapes.csv", delimiter=",")
+    loaded_mask = np.loadtxt("test_files/binary_mask_shapes.csv", delimiter=",")
     #loaded_mask = np.loadtxt("test_files/binary_mask_bateau.csv", delimiter=",")
-    loaded_mask = np.loadtxt("test_files/binary_mask_duck.csv", delimiter=",")
+    #loaded_mask = np.loadtxt("test_files/binary_mask_duck.csv", delimiter=",")
     loaded_mask = loaded_mask.astype(int)
     show = loaded_mask.copy()
 
@@ -494,7 +464,7 @@ if __name__ == "__main__":
     # Initial confidence matrix
     confidence_matrix = np.ones_like(loaded_mask, dtype=np.float32) - loaded_mask
 
-    for _ in range(1):
+    for _ in range(10):
     #while(len(loaded_mask[loaded_mask == 1]) != 0):
         confidence_fill_front = np.empty((0,))
         data_fill_front = np.empty((0,))
@@ -507,27 +477,27 @@ if __name__ == "__main__":
         for pixel in points_contour:
             window_coordinates, _ = extract_window(pixel, window_size, image_unfilled, loaded_mask)
             pixel_confidence = calculate_confidence(confidence_matrix, window_coordinates)
-            pixel_data = calculate_data(image, loaded_mask, pixel, 2, 1)  ######use image_unfilled
+            pixel_data = calculate_data(image_unfilled, loaded_mask, pixel, 2, 1)  ######### image or image_unfilled???
 
             #------------para Print Normal e gradiente------------------------#
-            # pixel_normal = calculate_normal(loaded_mask, pixel, 4)
-            # pixel_gradient = calculate_gradient(image_unfilled, loaded_mask, pixel, 2, 1)
+            pixel_normal = calculate_normal(loaded_mask, pixel, 2)
+            pixel_gradient = calculate_gradient(image_unfilled, loaded_mask, pixel, 3, 1)
 
-            # normal_fill_front = np.vstack([normal_fill_front, pixel_normal])
-            # gradient_fill_front = np.vstack([gradient_fill_front, pixel_gradient])
+            normal_fill_front = np.vstack([normal_fill_front, pixel_normal])
+            gradient_fill_front = np.vstack([gradient_fill_front, pixel_gradient])
             #-----------------------------X-----------------------------------#
 
             confidence_fill_front = np.append(confidence_fill_front, pixel_confidence)
             data_fill_front = np.append(data_fill_front, pixel_data)
 
         #--------------------Print Normal e Gradiente-------------------------------------#
-        # img_height = 256
-        # img_width = 256
+        # img_height = 100
+        # img_width = 100
 
         # # Vetor de coordenadas (y, x) dos pixels onde queremos plotar vetores
         # coords = np.array(points_contour)
 
-        # vectors = np.array(gradient_fill_front) / 30
+        # vectors = np.array(gradient_fill_front) /30
 
         # # Cria uma matriz de zeros com o tamanho da imagem para plotagem
         # image_teste_arrows = np.zeros((img_height, img_width))
@@ -551,8 +521,8 @@ if __name__ == "__main__":
 
         #-------------------- Print dos valores de data ---------------------------#
         # # Defina as dimensões da imagem (altura, largura)
-        # img_height = 256
-        # img_width = 256
+        # img_height = 100
+        # img_width = 100
 
         # # Cria uma matriz de zeros com o tamanho da imagem
         # image_testeee = np.zeros((img_height, img_width))
@@ -566,7 +536,7 @@ if __name__ == "__main__":
         # plt.colorbar()
         # plt.title("Imagem com Valores de Data")
         # plt.show()
-        #--------------------------------X-----------------------------------------#
+        # #--------------------------------X-----------------------------------------#
 
 
         # Find the patch with highest priority
