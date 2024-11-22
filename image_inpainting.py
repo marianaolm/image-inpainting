@@ -332,7 +332,9 @@ def extract_patches(image, window_size):
     
     patches = patch_views.reshape((num_patches, m * m))
 
-    return patches
+    coords = [(i, j) for i in range(N - m + 1) for j in range(S - m + 1)]
+
+    return patches, coords
 
 
 def patch_matching(image_unfilled, loaded_mask, patch_values, window_size):
@@ -342,29 +344,25 @@ def patch_matching(image_unfilled, loaded_mask, patch_values, window_size):
     and given patch values, ignoring areas marked as NaN in patch_values and avoiding 
     patches that contain unfilled regions according to loaded_mask.
 
-    Parameters:
-    - image_unfilled (numpy.ndarray): The image that contains unfilled areas to be filled.
-    - loaded_mask (numpy.ndarray): A binary mask indicating the unfilled areas (1 for unfilled, 0 for filled).
-    - patch_values (list or numpy.ndarray): A list or array of patch values to compare against.
-    - window_size (int): The size of the patch to be extracted from the image.
-
     Returns:
     - fill_values (numpy.ndarray): The optimal fill values identified from the patches.
+    - chosen_coords (tuple): The coordinates (row, col) of the top-left corner of the selected patch.
     """
-    # Extract patches from the unfilled image
-    image_patches = extract_patches(image_unfilled, window_size)
-    image_patches_array = np.array(image_patches)
+    # Extract patches and their coordinates
+    image_patches, image_coords = extract_patches(image_unfilled, window_size)
+    loaded_mask_patches, mask_coords = extract_patches(loaded_mask, window_size)
 
-    # Convert patch values to a numpy array and create a mask for NaN values in patch_values
+    image_patches_array = np.array(image_patches)
     patch_values_array = np.array(patch_values)
+
+    # Create a mask for NaN values in patch_values
     valid_mask = ~np.isnan(patch_values_array)  # True where values in patch_values are not NaN
 
     # Filter out any patches that correspond to unfilled areas in the loaded_mask
-    loaded_mask_patches = extract_patches(loaded_mask, window_size)
     loaded_mask_patches_array = np.array(loaded_mask_patches)
     valid_patches_mask = np.all(loaded_mask_patches_array == 0, axis=1)  # Only fully filled patches
-
     valid_image_patches = image_patches_array[valid_patches_mask]
+    valid_coords = [image_coords[i] for i, valid in enumerate(valid_patches_mask) if valid]
 
     # Compute SSD only over valid (non-NaN) values
     diff = (valid_image_patches - patch_values_array) * valid_mask  # Ignores NaNs
@@ -374,61 +372,41 @@ def patch_matching(image_unfilled, loaded_mask, patch_values, window_size):
     # Identify the index of the patch with the minimum SSD
     min_index = np.argmin(ssd_vector)
 
-    # Return the optimal fill values from the identified patch
+    # Return the optimal fill values and the corresponding coordinates
     fill_values = valid_image_patches[min_index]
+    chosen_coords = valid_coords[min_index]
 
-    return fill_values
+    return fill_values, chosen_coords
 
 
 def create_test_csv(image, csv_name):
-    """
-    Function to process an image by selecting points and creating a binary mask.
-    
-    Parameters:
-        image (numpy.ndarray): The input image on which the processing will be performed.
-        
-    This function allows the user to select points on the image, creates a binary mask 
-    based on the selected region, and visualizes the results, including the target 
-    region's contour and the unfilled matrix.
-    
-    The user can exit the selection mode by pressing 'q'. If at least three points 
-    are selected, it saves the binary mask to a CSV file and displays:
-    - The binary mask scaled to 255 for visibility
-    - The contour of the selected region on the original image
-    - The unfilled matrix (original image with the selected region masked)
-    """
-    points = []  # List to store selected points
+    points = []
+    base_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # Display the image and set the mouse callback for point selection
+    def select_points(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            points.append((x, y))
+            cv2.circle(image, (x, y), 1, (0, 255, 0), -1)
+            if len(points) > 1:
+                cv2.line(image, points[-2], points[-1], (255, 0, 0), 1)
+            cv2.imshow('Image', image)
+
     cv2.imshow('Image', image)
     cv2.setMouseCallback('Image', select_points)
 
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-
-
     while True:
-        key = cv2.waitKey(1) & 0xFF 
+        key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
 
     if len(points) >= 3:
-        binary_mask, contour = get_matrix_mask(image, points)
+        binary_mask, _ = get_matrix_mask(image.copy(), points)
 
-        # Save the binary mask to a CSV file
-        np.savetxt(f'../test_files/{csv_name}.csv', binary_mask, delimiter=",")
+        output_dir = os.path.join(base_dir, 'test_files')
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, f'{csv_name}.csv')
 
-        # Show the binary mask scaled to 255
-        cv2.imshow('Target Region', binary_mask * 255)  
-        
-        # Draw the contour on the original image
-        cv2.drawContours(image, [np.array(contour, dtype=np.int32)], -1, (0, 0, 255), 2)
-        cv2.imshow('Contour', image)
-
-        # Create and display the unfilled matrix (background)
-        image_unfilled = image * (1 - binary_mask[:, :, np.newaxis])
-        cv2.imshow('Unfilled Matrix', image_unfilled)
-
-        cv2.waitKey(0)
+        np.savetxt(output_path, binary_mask, delimiter=",")
 
     cv2.destroyAllWindows()
  
@@ -440,20 +418,29 @@ if __name__ == "__main__":
     drawing = False
     points = []
 
-    window_size = 5
-
+    window_size = 11
+    output_dir = "test/iteration_images"
+    video_path = "test/video/filled_image_video_aerian11.mp4"
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(video_path), exist_ok=True)
 
     # Load the image
+    image = cv2.imread('images/aerien1.jpg', cv2.IMREAD_GRAYSCALE)
     #image = cv2.imread('images/chile.png', cv2.IMREAD_GRAYSCALE)
-    image = cv2.imread('images/shapes_image.png', cv2.IMREAD_GRAYSCALE)
+    #image = cv2.imread('images/shapes_image.png', cv2.IMREAD_GRAYSCALE)
     #image = cv2.imread('images/bateau.jpg', cv2.IMREAD_GRAYSCALE)
     #image = cv2.imread('images/duck_256.jpg', cv2.IMREAD_GRAYSCALE)
+    #image = cv2.imread('images/bergamo_big.JPG', cv2.IMREAD_GRAYSCALE)
     img_copy = image.copy()
 
+    #create_test_csv(image, 'binary_mask_aerien')
+
+    loaded_mask = np.loadtxt("test_files/binary_mask_aerien.csv", delimiter=",")
     #loaded_mask = np.loadtxt("test_files/binary_mask_chile_sinal.csv", delimiter=",")
-    loaded_mask = np.loadtxt("test_files/binary_mask_shapes.csv", delimiter=",")
+    #loaded_mask = np.loadtxt("test_files/binary_mask_shapes.csv", delimiter=",")
     #loaded_mask = np.loadtxt("test_files/binary_mask_bateau.csv", delimiter=",")
     #loaded_mask = np.loadtxt("test_files/binary_mask_duck.csv", delimiter=",")
+    #loaded_mask = np.loadtxt("test_files/binary_mask_bergamo_big.csv", delimiter=",")
     loaded_mask = loaded_mask.astype(int)
     show = loaded_mask.copy()
 
@@ -464,13 +451,14 @@ if __name__ == "__main__":
     # Initial confidence matrix
     confidence_matrix = np.ones_like(loaded_mask, dtype=np.float32) - loaded_mask
 
-    for _ in range(10):
-    #while(len(loaded_mask[loaded_mask == 1]) != 0):
+    iteration = 0
+
+    while(len(loaded_mask[loaded_mask == 1]) != 0):
         confidence_fill_front = np.empty((0,))
         data_fill_front = np.empty((0,))
 
-        normal_fill_front = np.empty((0, 2)) #
-        gradient_fill_front = np.empty((0, 2)) #
+        normal_fill_front = np.empty((0, 2)) 
+        gradient_fill_front = np.empty((0, 2)) 
 
         contour, points_contour = get_fill_front(loaded_mask)
 
@@ -545,8 +533,18 @@ if __name__ == "__main__":
         patch_coordinates, patch_values = extract_window(pixel_highest_priority, window_size, image_unfilled, loaded_mask)
 
         # Patch matching
-        fill_values = patch_matching(image_unfilled, loaded_mask, patch_values, window_size)
+        fill_values, top_left_coordinate = patch_matching(image_unfilled, loaded_mask, patch_values, window_size)
         nan_indices = np.isnan(patch_values)
+
+        # Save the current state with the chosen patch highlighted
+        iteration_image = cv2.cvtColor(image_unfilled, cv2.COLOR_GRAY2BGR)
+        cv2.imwrite(f"{output_dir}/iteration_{iteration:03d}.png", iteration_image)
+
+        iteration_copy = iteration_image.copy()
+        top_left = top_left_coordinate
+        bottom_right = (top_left[0] + window_size - 1, top_left[1] + window_size - 1)
+        cv2.rectangle(iteration_copy, (top_left[1], top_left[0]), (bottom_right[1], bottom_right[0]), (0, 0, 255), 1)
+        cv2.imwrite(f"{output_dir}/iteration_{iteration:03d}b.png", iteration_copy)
 
         for idx, (x, y) in enumerate(patch_coordinates):
             if nan_indices[idx]: 
@@ -555,6 +553,21 @@ if __name__ == "__main__":
                 loaded_mask[x, y] = 0
                 confidence_matrix[x, y] = confidence_fill_front[index_highest_priority]
 
+        iteration += 1
+
+    images = sorted([os.path.join(output_dir, img) for img in os.listdir(output_dir) if img.endswith(".png")])
+    frame = cv2.imread(images[0])
+    height, width, layers = frame.shape
+    video = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), 1, (width, height))
+
+    for image_path in images:
+        frame = cv2.imread(image_path)
+        video.write(frame)
+
+    video.release()
+
+    for image_path in images:
+        os.remove(image_path)
 
     show_uint8 = (show * 255).astype(np.uint8)
     #image_unfilled = cv2.resize(image_unfilled, (200, 200))
