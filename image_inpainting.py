@@ -33,11 +33,13 @@ def select_points(event, x, y, flags, param):
         img_copy = image.copy()
 
         for i, point in enumerate(points):
+            # Draw a red circle for each point
             cv2.circle(img_copy, point, 1, (0, 0, 255), -1)
 
             if i > 0:
-                cv2.line(img_copy, points[i - 1], points[i], (0, 255, 0), 2)
+                cv2.line(img_copy, points[i - 1], points[i], (0, 255, 0), 1)
 
+        # Update the displayed image
         cv2.imshow('Image', img_copy)
 
 
@@ -262,6 +264,7 @@ def calculate_gradient(image_unfilled, mask, p, d, sigma, filter = False):
 
     return (grad_x, grad_y)
 
+
 def calculate_normal(mask, p, d):
     """
     Returns the vector normal to the border of the target region in the point p. Norm equals 1. 
@@ -380,34 +383,48 @@ def patch_matching(image_unfilled, loaded_mask, patch_values, window_size):
 
 
 def create_test_csv(image, csv_name):
+    """
+    Allows the user to manually select points on an image and generates
+    a binary mask based on the selected points. The mask is saved as a CSV file.
+
+    Parameters:
+    - image (numpy.ndarray): The input image on which points are selected.
+    - csv_name (str): The name of the CSV file where the binary mask will be saved.
+
+    Notes:
+    - Press 'q' to stop the point selection and save the mask.
+    """
+    global points, img_copy
     points = []
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    img_copy = image.copy()
 
-    def select_points(event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            points.append((x, y))
-            cv2.circle(image, (x, y), 1, (0, 255, 0), -1)
-            if len(points) > 1:
-                cv2.line(image, points[-2], points[-1], (255, 0, 0), 1)
-            cv2.imshow('Image', image)
-
-    cv2.imshow('Image', image)
+    # Display the image and set up the callback
+    cv2.imshow('Image', img_copy)
     cv2.setMouseCallback('Image', select_points)
 
+    # Wait for the user to press 'q' to finish
     while True:
         key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
+        if key == ord('q'):  # Press 'q' to quit
             break
 
+    # Generate and save the binary mask if enough points are selected
     if len(points) >= 3:
-        binary_mask, _ = get_matrix_mask(image.copy(), points)
+        # Create a binary mask using a filled polygon
+        height, width = image.shape[:2]
+        binary_mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillPoly(binary_mask, [np.array(points, dtype=np.int32)], 1)
 
+        # Ensure the directory exists
+        base_dir = os.path.dirname(os.path.abspath(__file__))
         output_dir = os.path.join(base_dir, 'test_files')
         os.makedirs(output_dir, exist_ok=True)
+
+        # Save the binary mask as a CSV
         output_path = os.path.join(output_dir, f'{csv_name}.csv')
+        np.savetxt(output_path, binary_mask, delimiter=",", fmt="%d")
 
-        np.savetxt(output_path, binary_mask, delimiter=",")
-
+    # Close all OpenCV windows
     cv2.destroyAllWindows()
  
 
@@ -418,29 +435,19 @@ if __name__ == "__main__":
     drawing = False
     points = []
 
-    window_size = 11
+    window_size = 9
     output_dir = "test/iteration_images"
-    video_path = "test/video/filled_image_video_aerian11.mp4"
+    video_path = "test/video/filled_image_video_bateau_petit9.mp4"
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.dirname(video_path), exist_ok=True)
 
     # Load the image
-    image = cv2.imread('images/aerien1.jpg', cv2.IMREAD_GRAYSCALE)
-    #image = cv2.imread('images/chile.png', cv2.IMREAD_GRAYSCALE)
-    #image = cv2.imread('images/shapes_image.png', cv2.IMREAD_GRAYSCALE)
-    #image = cv2.imread('images/bateau.jpg', cv2.IMREAD_GRAYSCALE)
-    #image = cv2.imread('images/duck_256.jpg', cv2.IMREAD_GRAYSCALE)
-    #image = cv2.imread('images/bergamo_big.JPG', cv2.IMREAD_GRAYSCALE)
+    image = cv2.imread('images/bateau.jpg', cv2.IMREAD_GRAYSCALE)
     img_copy = image.copy()
 
-    #create_test_csv(image, 'binary_mask_aerien')
+    create_test_csv(image, 'binary_mask_bateau_test')
 
-    loaded_mask = np.loadtxt("test_files/binary_mask_aerien.csv", delimiter=",")
-    #loaded_mask = np.loadtxt("test_files/binary_mask_chile_sinal.csv", delimiter=",")
-    #loaded_mask = np.loadtxt("test_files/binary_mask_shapes.csv", delimiter=",")
-    #loaded_mask = np.loadtxt("test_files/binary_mask_bateau.csv", delimiter=",")
-    #loaded_mask = np.loadtxt("test_files/binary_mask_duck.csv", delimiter=",")
-    #loaded_mask = np.loadtxt("test_files/binary_mask_bergamo_big.csv", delimiter=",")
+    loaded_mask = np.loadtxt("test_files/binary_mask_bateau_test.csv", delimiter=",")
     loaded_mask = loaded_mask.astype(int)
     show = loaded_mask.copy()
 
@@ -570,13 +577,8 @@ if __name__ == "__main__":
         os.remove(image_path)
 
     show_uint8 = (show * 255).astype(np.uint8)
-    #image_unfilled = cv2.resize(image_unfilled, (200, 200))
     cv2.imshow('Updated Image', image_unfilled)
-    #show_uint8 = cv2.resize(show_uint8, (200, 200))
     cv2.imshow('Initial Image', show_uint8)
-    #loaded_mask = cv2.resize((loaded_mask*255).astype(np.uint8), (200, 200))
-    cv2.imshow('Loaded mask', (loaded_mask*255).astype(np.uint8))
-    #confidence_matrix = cv2.resize((confidence_matrix * 255).astype(np.uint8), (200, 200))
     cv2.imshow('Confidence', (confidence_matrix * 255).astype(np.uint8))
     cv2.waitKey(0)
     cv2.destroyAllWindows()
